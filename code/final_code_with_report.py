@@ -16,7 +16,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 
 df = pd.read_csv('/content/space_science_data_202201-202510.csv')
 
-# Preprocessing: Create 'doc_text' for semantic search
+# Preprocessing: Create doc_text for semantic search
 def safe_parse_tags(x):
     if isinstance(x, list): return x
     if pd.isna(x): return []
@@ -35,20 +35,20 @@ def build_doc_text(row):
 df["doc_text"] = df.apply(build_doc_text, axis=1)
 df = df[df["doc_text"].str.len() > 0].reset_index(drop=True)
 
-#Generate Semantic Embeddings
+#Generate semantic embeddings
 model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
 video_embeddings = model.encode(df["doc_text"].tolist(), show_progress_bar=True, convert_to_numpy=True)
 
-#Build Nearest Neighbors Index for Baseline Retrieval
+#Build nearest neighbors index for baseline retrieval
 nn_index = NearestNeighbors(n_neighbors=50, metric="cosine")
 nn_index.fit(video_embeddings)
 
-# Map ID to Embedding for fast lookup
+# Map ID to embedding for fast lookup
 video_id_to_embedding = pd.Series(list(video_embeddings), index=df['video_id'])
 
 """Core Retrieval & Re-Ranking Functions"""
 
-# Baseline Semantic Search
+# Baseline semantic search
 def search_videos(query: str, top_k: int = 50) -> pd.DataFrame:
     q_emb = model.encode([query], convert_to_numpy=True)[0].reshape(1, -1)
     distances, indices = nn_index.kneighbors(q_emb, n_neighbors=top_k)
@@ -57,7 +57,7 @@ def search_videos(query: str, top_k: int = 50) -> pd.DataFrame:
     results["similarity"] = 1 - distances[0] # Convert distance to similarity
     return results
 
-# Personalization Score
+# Personalization score
 def calculate_personalization_score(results_df, user_profile_emb):
     if user_profile_emb is None:
         return [0.0] * len(results_df)
@@ -76,67 +76,65 @@ def calculate_personalization_score(results_df, user_profile_emb):
 # Re-Ranker
 def search_videos_full_personalized(
     query: str,
-    user_profile: dict = None,  # Includes 'embedding' and 'preferences'
+    user_profile: dict = None,  # Includes embedding and preferences
     top_k: int = 5,
-    alpha: float = 0.5,         # Weight for Semantic Similarity
-    view_boost: float = 0.5,    # Weight for View Count Popularity
-    pref_boost: float = 0.2,    # Weight for Keyword Boost
-    pers_score_boost: float = 0.8 # Weight for Vector Personalization
+    alpha: float = 0.5,         # Weight for Semantic similarity
+    view_boost: float = 0.5,    # Weight for view count popularity
+    pref_boost: float = 0.2,    # Weight for keyword boost
+    pers_score_boost: float = 0.8 # Weight for vector personalization
 ) -> pd.DataFrame:
 
-    # Query Augmentation (Simple keywords injection)
+    # Query Augmentation 
     search_query = query
     if user_profile and user_profile.get('preferences'):
         search_query += " " + ", ".join(user_profile['preferences'])
 
-    # Initial Retrieval (Broad)
+    # Initial retrieval (Broad)
     results = search_videos(search_query, top_k=50) # Fetch deeper pool for re-ranking
 
-    # Calculate Ranking Signals
-    # Signal: View Count (Log scaled)
+    # Calculate ranking signals
+    # Signal: view count (Log scaled)
     results['view_count'] = pd.to_numeric(results['view_count'], errors='coerce').fillna(0)
     norm_views = (results['view_count'] - results['view_count'].min()) / (results['view_count'].max() - results['view_count'].min())
     view_score = np.log1p(norm_views * 1000) * view_boost
 
-    # Signal: Keyword Preference Matches
+    # Signal: Keyword preference match
     keyword_score = 0.0
     if user_profile and user_profile.get('preferences'):
         pattern = "|".join(user_profile['preferences'])
         # Boolean match converted to float
         keyword_score = results['doc_text'].str.contains(pattern, case=False, na=False).astype(float) * pref_boost
 
-    # Signal: User Embedding Similarity
+    # Signal: user embedding similarity
     pers_vec_score = 0.0
     if user_profile and user_profile.get('embedding') is not None:
         raw_pers_scores = calculate_personalization_score(results, user_profile['embedding'])
-        results['personalization_score'] = raw_pers_scores # Save for display
+        results['personalization_score'] = raw_pers_scores 
         pers_vec_score = np.array(raw_pers_scores) * pers_score_boost
 
-    # Final Composite Score (Alpha Logic)
-    # Score = Alpha * (Semantic) + (1-Alpha) * (Personalization Signals)
+    # final composite score (Alpha logic)
+    # Score = Alpha * (semantic) + (1-Alpha) * (personalization signals)
     composite_personalization = view_score + keyword_score + pers_vec_score
     results['re_rank_score'] = (alpha * results['similarity']) + ((1 - alpha) * composite_personalization)
 
     return results.sort_values(by='re_rank_score', ascending=False).head(top_k)
 
-"""Quantitative Evaluation"""
 
 import numpy as np
 import pandas as pd
 
-# Ground Truth Data
+# Ground truth data
 queries_and_ground_truth = {
     "how do black holes form?": ["How black holes are formed", "Black Holes Explained", "What are Black holes made of?"],
     "James Webb Space Telescope discoveries": ["James Webb Space Telescope", "Fun Facts about James Webb", "4 Amazing Pictures Taken By James Webb"],
-    # Note: The query text in the table is slightly longer, updated here to match
     "Explain the process of planet formation outside our solar system": ["How Our Solar system Actually work?", "Formation of Solar system", "How Planet Earth Formed?"],
     "what is dark matter?": ["What is dark matter?", "What exactly is Dark Matter?"]
 }
 
-# Evaluation Function
+# Evaluation function
 def evaluate(query, search_func, ground_truth, k=5):
     results = search_func(query, top_k=k)
-    # Ensure we have results before trying to access 'title'
+    # Ensure we have results before trying to access title
     if results.empty:
         return 0.0, 0.0
 
@@ -166,14 +164,14 @@ eval_user_profile = {
     "user_id": "table1_repro_user",
     "preferences": ["black holes", "dark matter"], # Preferences guide the keyword boost
     "embedding": specific_user_embedding,         # Embedding guides vector similarity
-    "interaction_data": { # Not strictly needed for the search function but good practice
+    "interaction_data": { # Not needed for the search function now but good practice
         "view": [bh_vid, dm_vid],
         "like": [], "share": [], "comment": []
     }
 }
 
 
-# Run Comparison
+# Run comparison
 results_data = []
 
 print(f"{'Query':<45} | {'Strategy':<22} | {'P@5':<6} | {'R@5':<6}")
@@ -182,7 +180,7 @@ print("-" * 85)
 for query, gt in queries_and_ground_truth.items():
     query_display = query[:42] + '...' if len(query) > 42 else query.ljust(45)
 
-    # Semantic Baseline
+    # Semantic baseline
     p_base, r_base = evaluate(query, lambda q, top_k: search_videos(q, top_k), gt)
     print(f"{query_display} | {'Semantic baseline':<22} | {p_base:.2f}   | {r_base:.2f}")
     results_data.append({'Strategy': 'Semantic baseline', 'P@5': p_base, 'R@5': r_base})
@@ -193,8 +191,8 @@ for query, gt in queries_and_ground_truth.items():
     print(f"{'':<45} | {'View-count re-ranked':<22} | {p_view:.2f}   | {r_view:.2f}")
     results_data.append({'Strategy': 'View-count re-ranked', 'P@5': p_view, 'R@5': r_view})
 
-    # Hybrid Personalized
-    # Use the SPECIFIC user profile defined above
+    # Hybrid personalized
+    # Use the specific user profile defined above
     hybrid_func = lambda q, top_k: search_videos_full_personalized(q, eval_user_profile, top_k, alpha=0.5)
     p_hyb, r_hyb = evaluate(query, hybrid_func, gt)
     print(f"{'':<45} | {'Hybrid personalized':<22} | {p_hyb:.2f}   | {r_hyb:.2f}")
@@ -202,7 +200,6 @@ for query, gt in queries_and_ground_truth.items():
 
     print("-" * 85)
 
-# Calculate and Print Averages
 results_df = pd.DataFrame(results_data)
 averages = results_df.groupby('Strategy').mean().reset_index()
 
@@ -243,7 +240,7 @@ user_b_profile = {
     }
 }
 
-# Execute Query
+# Generic euery
 test_query = "space news"
 
 print(f"\n--- Case Study: Query '{test_query}' ---\n")
@@ -256,14 +253,14 @@ print("\nUSER B (Planet Fan) Results:")
 res_b = search_videos_full_personalized(test_query, user_b_profile, top_k=5)
 display(res_b[['title', 'view_count', 'similarity', 'personalization_score', 're_rank_score']])
 
-"""USER A (Black Hole Fan) Results:
+"""USER A (black hole fan) results:
 Observation: For User A, whose profile indicates a strong interest in 'black holes' and 'general relativity', the top results are predominantly videos related to black holes. Even though the original query was a generic 'space news', the re-ranker pushed highly relevant content to this user to the top.
 Impact of Personalization: Notice the personalization_score column. These values are relatively high (ranging from ~0.59 to ~0.75). This score, derived from the user's embedding, significantly boosted the re_rank_score, ensuring that videos aligned with User A's specific interests were prioritized.
 
 USER B (Planet Fan) Results:
 Observation: In contrast, for User B, whose profile focuses on 'planets', 'exoplanets', and 'solar system', the top recommendations are all about planets and the solar system.
 Impact of Personalization: Similar to User A, the personalization_score for User B is high (ranging from ~0.45 to ~0.72) for planet-related content. This boost from the personalization score effectively re-ranked planet-related videos to the top for User B, despite the same generic 'space news' query.
-Conclusion: The qualitative case study successfully demonstrates that the hybrid re-ranking model is effective in tailoring search results to individual user preferences. The personalization_score plays a crucial role in re-ordering the initial semantic search results to present content that aligns with each user's specific interests, even when the initial query is broad.
+Conclusion: The qualitative case study successfully demonstrates that the hybrid re-ranking model is effective in tailoring search results to individual user preferences. The personalization_score plays a important effect in re-ordering the initial semantic search results to present content that aligns with each user's specific interests, even when the initial query is broad.
 """
 
 import matplotlib.pyplot as plt
