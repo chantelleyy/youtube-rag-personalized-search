@@ -240,7 +240,7 @@ user_b_profile = {
     }
 }
 
-# Generic euery
+# Generic query
 test_query = "space news"
 
 print(f"\n--- Case Study: Query '{test_query}' ---\n")
